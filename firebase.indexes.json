@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "appointments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "technique", "order": "ASCENDING" },
+        { "fieldPath": "startTimeMinutes", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "appointments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "startTimeMinutes", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

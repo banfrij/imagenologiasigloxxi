@@ -1,0 +1,53 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /appointments/{appointmentId} {
+      allow read: if true;
+      allow create, update: if validateAppointment(request.resource.data);
+      allow delete: if true;
+    }
+
+    function validateAppointment(data) {
+      return data is map
+        && data.keys().hasAll([
+          'id',
+          'time',
+          'date',
+          'technique',
+          'study',
+          'duration',
+          'patient',
+          'age',
+          'number',
+          'doctor',
+          'ambulance',
+          'sedation',
+          'oxygen',
+          'noteTitle',
+          'observation',
+          'startTimeMinutes',
+          'endTimeMinutes'
+        ])
+        && data.id is int
+        && data.time is string && data.time != ''
+        && data.date is string && data.date != ''
+        && data.technique is string && data.technique != ''
+        && data.study is string && data.study != ''
+        && data.duration is string && data.duration != ''
+        && data.patient is string && data.patient != ''
+        && data.age is string && data.age != ''
+        && data.number is string && data.number != ''
+        && data.doctor is string && data.doctor != ''
+        && data.ambulance is bool
+        && data.sedation is bool
+        && data.oxygen is bool
+        && data.noteTitle is string && data.noteTitle != ''
+        && data.observation is string && data.observation != ''
+        && data.startTimeMinutes is int
+        && data.endTimeMinutes is int
+        && data.startTimeMinutes >= 0
+        && data.endTimeMinutes > data.startTimeMinutes;
+    }
+  }
+}
