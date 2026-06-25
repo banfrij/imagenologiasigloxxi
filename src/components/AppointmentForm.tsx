@@ -20,6 +20,7 @@ export type AppointmentData = AppointmentFormValues & {
   id: number
   time: string
   date: string
+  branch?: 'Alamos' | 'San Felipe'
   firestoreId?: string
   startTimeMinutes?: number
   endTimeMinutes?: number
@@ -182,10 +183,10 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
               🚑 Ambulancia
             </IconButton>
             <IconButton type="button" $active={sedation} onClick={() => setSedation((value) => !value)}>
-              � Sedación
+              💤 Sedación
             </IconButton>
             <IconButton type="button" $active={oxygen} onClick={() => setOxygen((value) => !value)}>
-              🛢 Oxígeno
+              🛢️ Tanque O2
             </IconButton>
           </IconOptions>
         </FormGroupFull>
@@ -338,7 +339,7 @@ const IconButton = styled.button<{ $active: boolean }>`
   background: ${({ $active }) => ($active ? '#eef2ff' : '#f8fafc')};
   color: #111827;
   font-weight: 600;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.2;
 
   &:hover {

@@ -3,15 +3,25 @@ import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where } 
 import styled from 'styled-components'
 import AppointmentForm, { type AppointmentData, type AppointmentFormValues } from '../components/AppointmentForm'
 import { db } from '../firebase'
-import FirebaseStatus from '../components/FirebaseStatus'
 
-const branch = 'Alamos'
-const columns = ['RM', 'TC', 'Rayos X', 'Ultrasonido']
-const columnToTechnique: Record<string, AppointmentData['technique']> = {
-  RM: 'RM',
-  TC: 'TC',
-  'Rayos X': 'Rayos X',
-  Ultrasonido: 'Ultrasonido',
+const BRANCHES = ['Alamos', 'San Felipe'] as const
+type BranchName = (typeof BRANCHES)[number]
+type BranchView = BranchName | 'Ambas'
+
+const formatBranchLabel = (branch: BranchName) => (branch === 'Alamos' ? 'Álamos' : 'San Felipe')
+
+const ALL_COLUMNS = ['RM', 'TC', 'RXUSG'] as const
+type ScheduleColumn = (typeof ALL_COLUMNS)[number]
+
+const BRANCH_COLUMNS: Record<BranchName, ScheduleColumn[]> = {
+  Alamos: [...ALL_COLUMNS],
+  'San Felipe': ['RM', 'TC'],
+}
+
+const columnToTechniques: Record<ScheduleColumn, AppointmentData['technique'][]> = {
+  RM: ['RM'],
+  TC: ['TC'],
+  RXUSG: ['Rayos X', 'Ultrasonido'],
 }
 
 const studyCatalog: Record<AppointmentData['technique'], string[]> = {
@@ -55,6 +65,7 @@ function isSameDate(a: Date, b: Date) {
 }
 
 type SelectedSlot = {
+  branch: BranchName
   technique: AppointmentData['technique']
   time: string
   appointment?: AppointmentData
@@ -77,9 +88,19 @@ export default function AgendaScreen() {
 
   const [newlyCreatedAppointmentId, setNewlyCreatedAppointmentId] = useState<number | null>(null)
   const [calendarCollapsed, setCalendarCollapsed] = useState(false)
+  const [branchView, setBranchView] = useState<BranchView>('Alamos')
 
   const seedFirstAppointment = async () => {
-    if (appointments.length > 0) {
+    if (branchView === 'Ambas') {
+      window.alert('Selecciona una sucursal específica para registrar el primer paciente.')
+      return
+    }
+
+    const branchAppointments = appointments.filter(
+      (appointment) => (appointment.branch ?? 'Alamos') === branchView,
+    )
+
+    if (branchAppointments.length > 0) {
       window.alert('Ya hay citas registradas. El primer paciente solo se puede agregar cuando la agenda está vacía.')
       return
     }
@@ -103,6 +124,7 @@ export default function AgendaScreen() {
       id: nextAppointmentId,
       time: '09:00',
       date: activeDateString,
+      branch: branchView,
       ...values,
     }
 
@@ -137,6 +159,7 @@ export default function AgendaScreen() {
         const snapshot = await getDocs(collection(db, 'appointments'))
         if (!snapshot.empty) {
           const firestoreAppointments = snapshot.docs.map((document) => ({
+            branch: 'Alamos' as BranchName,
             ...(document.data() as AppointmentData),
             firestoreId: document.id,
           }))
@@ -160,6 +183,9 @@ export default function AgendaScreen() {
   const currentMonth = activeDate.toLocaleString('es-ES', { month: 'long' })
   const currentDay = activeDate.getDate()
   const currentWeekday = activeDate.toLocaleString('es-ES', { weekday: 'long' })
+  const visibleBranches: BranchName[] = branchView === 'Ambas' ? [...BRANCHES] : [branchView]
+  const branchViewLabel = branchView === 'Ambas' ? 'Álamos y San Felipe' : formatBranchLabel(branchView)
+  const primaryBranch = branchView === 'Ambas' ? 'Alamos' : branchView
 
   const today = new Date()
   const isActiveDateToday = activeDate.toDateString() === today.toDateString()
@@ -193,11 +219,24 @@ export default function AgendaScreen() {
     })
   }
 
-  const columnHasAppointments: Record<string, boolean> = columns.reduce((acc, col) => {
-    const technique = columnToTechnique[col] ?? 'RM'
-    acc[col] = appointments.some((a) => a.technique === technique && a.date === activeDateString)
-    return acc
-  }, {} as Record<string, boolean>)
+  const hasAppointmentsInPrimaryBranch = appointments.some(
+    (appointment) => (appointment.branch ?? 'Alamos') === primaryBranch,
+  )
+
+  const getColumnHasAppointments = (
+    branch: BranchName,
+    branchColumns: ScheduleColumn[],
+  ): Record<ScheduleColumn, boolean> =>
+    branchColumns.reduce((acc, col) => {
+      const techniques = columnToTechniques[col] ?? ['RM']
+      acc[col] = appointments.some(
+        (appointment) =>
+          (appointment.branch ?? 'Alamos') === branch &&
+          techniques.includes(appointment.technique) &&
+          appointment.date === activeDateString,
+      )
+      return acc
+    }, {} as Record<ScheduleColumn, boolean>)
 
   const durationToMinutes = (duration: string) => {
     if (duration === '2 hr') return 120
@@ -223,19 +262,31 @@ export default function AgendaScreen() {
     })
   }
 
-  const getAppointmentCoveringSlot = (column: string, time: string) => {
-    const technique = columnToTechnique[column] ?? 'RM'
+  const getAppointmentCoveringSlot = (branch: BranchName, column: ScheduleColumn, time: string) => {
+    const techniques = columnToTechniques[column] ?? ['RM']
     return appointments.find((appointment) => {
-      if (appointment.technique !== technique) return false
+      if ((appointment.branch ?? 'Alamos') !== branch) return false
+      if (!techniques.includes(appointment.technique)) return false
       if (appointment.date !== activeDateString) return false
       return getSlotTimes(appointment.time, durationToMinutes(appointment.duration)).includes(time)
     })
   }
 
-  const isSlotAvailable = (technique: AppointmentData['technique'], startTime: string, durationMinutes: number, excludeId?: number) => {
+  const isSlotAvailable = (
+    branch: BranchName,
+    technique: AppointmentData['technique'],
+    startTime: string,
+    durationMinutes: number,
+    excludeId?: number,
+  ) => {
     const requestedSlots = getSlotTimes(startTime, durationMinutes)
     return !appointments.some((appointment) => {
-      if (appointment.technique !== technique) return false
+      if ((appointment.branch ?? 'Alamos') !== branch) return false
+      if (technique === 'Rayos X') {
+        if (!['Rayos X', 'Ultrasonido'].includes(appointment.technique)) return false
+      } else if (appointment.technique !== technique) {
+        return false
+      }
       if (appointment.date !== activeDateString) return false
       if (excludeId !== undefined && appointment.id === excludeId) return false
       const occupiedSlots = getSlotTimes(appointment.time, durationToMinutes(appointment.duration))
@@ -243,11 +294,11 @@ export default function AgendaScreen() {
     })
   }
 
-  const handleCellClick = (column: string, time: string) => {
-    const technique = columnToTechnique[column] ?? 'RM'
-    const appointment = getAppointmentCoveringSlot(column, time)
+  const handleCellClick = (branch: BranchName, column: ScheduleColumn, time: string) => {
+    const technique = (columnToTechniques[column] ?? ['RM'])[0]
+    const appointment = getAppointmentCoveringSlot(branch, column, time)
     const selectedTime = appointment ? appointment.time : time
-    setSelectedCell({ technique, time: selectedTime, appointment })
+    setSelectedCell({ branch, technique, time: selectedTime, appointment })
   }
 
   const syncAppointments = (nextAppointments: AppointmentData[]) => {
@@ -263,6 +314,7 @@ export default function AgendaScreen() {
       id: appointment.id,
       time: appointment.time,
       date: appointment.date,
+      branch: appointment.branch ?? 'Alamos',
       technique: appointment.technique,
       study: appointment.study,
       duration: appointment.duration,
@@ -319,10 +371,11 @@ export default function AgendaScreen() {
     if (!cell) return
 
     const durationMinutes = durationToMinutes(values.duration)
+    const branch = cell.branch
     const technique = cell.technique
     const excludeId = cell.appointment?.id
 
-    if (!isSlotAvailable(technique, cell.time, durationMinutes, excludeId)) {
+    if (!isSlotAvailable(branch, technique, cell.time, durationMinutes, excludeId)) {
       window.alert('El horario no está disponible para esa duración.')
       return
     }
@@ -330,6 +383,7 @@ export default function AgendaScreen() {
     if (cell.appointment) {
       const updatedAppointment: AppointmentData = {
         ...cell.appointment,
+        branch,
         ...values,
       }
       const updatedAppointments = appointments.map((appointment) =>
@@ -348,6 +402,7 @@ export default function AgendaScreen() {
         id: nextAppointmentId,
         time: cell.time,
         date: activeDateString,
+        branch,
         ...values,
       }
       const firestoreId = await saveAppointmentToFirestore(newAppointment)
@@ -373,6 +428,90 @@ export default function AgendaScreen() {
 
   const handleCancel = () => {
     setSelectedCell(null)
+  }
+
+  const renderBranchSchedule = (branch: BranchName) => {
+    const branchColumns = BRANCH_COLUMNS[branch]
+    const columnHasAppointments = getColumnHasAppointments(branch, branchColumns)
+
+    return (
+      <BranchAgendaBlock key={branch}>
+        <BranchAgendaTitle
+          type="button"
+          onClick={() => setBranchView(branch)}
+          title={`Ver solo ${formatBranchLabel(branch)}`}
+        >
+          {formatBranchLabel(branch)} {branchView === 'Ambas' ? '↗ Ver solo' : ''}
+        </BranchAgendaTitle>
+        <ScheduleGrid $compareMode={branchView === 'Ambas'}>
+          <ScheduleRowHeader $columnsCount={branchColumns.length} $compact={branchView === 'Ambas'}>
+            <TimeHeader>Hora</TimeHeader>
+            {branchColumns.map((column) => (
+              <ColumnHeader key={`${branch}-${column}`} $hasAny={columnHasAppointments[column]}>
+                {column}
+              </ColumnHeader>
+            ))}
+          </ScheduleRowHeader>
+
+          {timeLabels.map((time, rowIndex) => (
+            <ScheduleRow key={`${branch}-${time}`} $columnsCount={branchColumns.length} $compact={branchView === 'Ambas'}>
+              <TimeCell>{time}</TimeCell>
+              {branchColumns.map((column) => {
+                const appointment = getAppointmentCoveringSlot(branch, column, time)
+                const isStartSlot = appointment?.time === time
+                const isNew = appointment ? appointment.id === newlyCreatedAppointmentId : false
+                const continuesBelow = Boolean(
+                  appointment &&
+                    getSlotTimes(appointment.time, durationToMinutes(appointment.duration)).includes(
+                      timeLabels[rowIndex + 1] ?? '',
+                    ),
+                )
+                const isLunch = time === '14:00' || time === '14:30'
+                const hour = parseInt(time.split(':')[0], 10)
+                const isAfterHours = hour >= 19
+                return (
+                  <ScheduleCell
+                    key={`${branch}-${column}-${time}`}
+                    type="button"
+                    $hasAppointment={Boolean(appointment)}
+                    $isBlocked={Boolean(appointment) && !isStartSlot}
+                    $isNew={isNew}
+                    $continuesBelow={continuesBelow}
+                    $isLunch={isLunch}
+                    $isAfterHours={isAfterHours}
+                    aria-label={
+                      appointment
+                        ? `Editar cita ${formatBranchLabel(branch)} ${column} ${time}`
+                        : `Agregar cita ${formatBranchLabel(branch)} ${column} ${time}`
+                    }
+                    onClick={() => handleCellClick(branch, column, time)}
+                  >
+                    {appointment ? (
+                      isStartSlot ? (
+                        <CellContent>
+                          <CellName>{appointment.patient || 'Paciente'}</CellName>
+                          <CellMeta>
+                            {appointment.ambulance && <IconBadge title="Ambulancia">🚑</IconBadge>}
+                            {appointment.sedation && <IconBadge title="Sedación">💤</IconBadge>}
+                            {appointment.oxygen && <IconBadge title="Tanque de oxígeno">🛢️</IconBadge>}
+                          </CellMeta>
+                          <CellNote>{appointment.noteTitle}</CellNote>
+                          <CellStudy>{appointment.study}</CellStudy>
+                          <CellObservation>{appointment.observation}</CellObservation>
+                        </CellContent>
+                      ) : null
+                    ) : (
+                      <CellTooltip className="cell-tooltip">+</CellTooltip>
+                    )}
+                    <HoverLabel>{appointment ? 'Editar' : 'Agregar'}</HoverLabel>
+                  </ScheduleCell>
+                )
+              })}
+            </ScheduleRow>
+          ))}
+        </ScheduleGrid>
+      </BranchAgendaBlock>
+    )
   }
 
   return (
@@ -421,9 +560,51 @@ export default function AgendaScreen() {
         <AgendaActions>
           <AgendaInfo>
             <AgendaTitle>Agenda</AgendaTitle>
-            <AgendaSubTitle>Sucursal {branch} • {currentWeekday}, {currentMonth} {currentDay}</AgendaSubTitle>
+            <AgendaSubTitle>Sucursal {branchViewLabel} • {currentWeekday}, {currentMonth} {currentDay}</AgendaSubTitle>
+            {branchView === 'Ambas' && (
+              <CompareHint>Comparando horarios entre sucursales para distribuir mejor la carga.</CompareHint>
+            )}
           </AgendaInfo>
           <ActionGroup>
+            <BranchSelector role="tablist" aria-label="Selector de sucursal">
+              <BranchOption
+                type="button"
+                role="tab"
+                aria-selected={branchView === 'Alamos'}
+                $active={branchView === 'Alamos'}
+                onClick={() => setBranchView('Alamos')}
+              >
+                Álamos
+              </BranchOption>
+              <BranchOption
+                type="button"
+                role="tab"
+                aria-selected={branchView === 'San Felipe'}
+                $active={branchView === 'San Felipe'}
+                onClick={() => setBranchView('San Felipe')}
+              >
+                San Felipe
+              </BranchOption>
+              <BranchOption
+                type="button"
+                role="tab"
+                aria-selected={branchView === 'Ambas'}
+                $active={branchView === 'Ambas'}
+                onClick={() => setBranchView('Ambas')}
+              >
+                Ambas
+              </BranchOption>
+            </BranchSelector>
+            <ButtonGroup>
+              <FullscreenButton type="button" onClick={toggleFullscreen}>
+                {fullscreen ? 'Salir full' : 'Pantalla completa'}
+              </FullscreenButton>
+              {branchView !== 'Ambas' && !hasAppointmentsInPrimaryBranch && (
+                <SeedButton type="button" onClick={seedFirstAppointment}>
+                  Primer paciente
+                </SeedButton>
+              )}
+            </ButtonGroup>
             <DateNavigation>
               <DateButton type="button" onClick={() => changeDateByDays(-1)}>
                 ← Día anterior
@@ -435,78 +616,13 @@ export default function AgendaScreen() {
                 Día siguiente →
               </DateButton>
             </DateNavigation>
-            <ButtonGroup>
-              <FullscreenButton type="button" onClick={toggleFullscreen}>
-                {fullscreen ? 'Salir full' : 'Pantalla completa'}
-              </FullscreenButton>
-              {appointments.length === 0 && (
-                <SeedButton type="button" onClick={seedFirstAppointment}>
-                  Primer paciente
-                </SeedButton>
-              )}
-            </ButtonGroup>
-            <FirebaseBadge>
-              <FirebaseStatus />
-            </FirebaseBadge>
           </ActionGroup>
         </AgendaActions>
       </AgendaHeader>
 
-      <ScheduleGrid>
-        <ScheduleRowHeader>
-          <TimeHeader>Hora</TimeHeader>
-            {columns.map((column) => (
-            <ColumnHeader key={column} $hasAny={columnHasAppointments[column]}>{column}</ColumnHeader>
-          ))}
-        </ScheduleRowHeader>
-
-        {timeLabels.map((time, rowIndex) => (
-          <ScheduleRow key={time}>
-            <TimeCell>{time}</TimeCell>
-            {columns.map((column) => {
-              const appointment = getAppointmentCoveringSlot(column, time)
-              const isStartSlot = appointment?.time === time
-              const isNew = appointment ? appointment.id === newlyCreatedAppointmentId : false
-              const continuesBelow = Boolean(
-                appointment &&
-                  getSlotTimes(appointment.time, durationToMinutes(appointment.duration)).includes(timeLabels[rowIndex + 1] ?? ''),
-              )
-              return (
-                <ScheduleCell
-                  key={`${column}-${time}`}
-                  type="button"
-                  $hasAppointment={Boolean(appointment)}
-                  $isBlocked={Boolean(appointment) && !isStartSlot}
-                  $isNew={isNew}
-                  $continuesBelow={continuesBelow}
-                  aria-label={appointment ? `Editar cita ${column} ${time}` : `Agregar cita ${column} ${time}`}
-                  onClick={() => handleCellClick(column, time)}
-                >
-                  {appointment ? (
-                        isStartSlot ? (
-                          <CellContent>
-                            <CellName>{appointment.patient || 'Paciente'}</CellName>
-                            <CellMeta>
-                              {appointment.ambulance && <IconBadge title="Ambulancia">🚑</IconBadge>}
-                              {appointment.sedation && <IconBadge title="Sedación">💤</IconBadge>}
-                              {appointment.oxygen && <IconBadge title="Oxígeno">🫁</IconBadge>}
-                            </CellMeta>
-                            <CellNote>{appointment.noteTitle}</CellNote>
-                            <CellStudy>{appointment.study}</CellStudy>
-                          </CellContent>
-                        ) : (
-                          null
-                        )
-                      ) : (
-                        <CellTooltip className="cell-tooltip">+</CellTooltip>
-                      )}
-                  <HoverLabel>{appointment ? 'Editar' : 'Agregar'}</HoverLabel>
-                </ScheduleCell>
-              )
-            })}
-          </ScheduleRow>
-        ))}
-      </ScheduleGrid>
+      <BranchAgendaStack $compareMode={branchView === 'Ambas'}>
+        {visibleBranches.map((branch) => renderBranchSchedule(branch))}
+      </BranchAgendaStack>
 
       
       {selectedCell && (
@@ -535,13 +651,13 @@ export default function AgendaScreen() {
 
 const AgendaContainer = styled.section`
   display: grid;
-  gap: 24px;
+  gap: 12px;
 `
 
 const AgendaHeader = styled.div`
   display: grid;
   grid-template-columns: minmax(320px, 420px) 1fr;
-  gap: 24px;
+  gap: 14px;
   align-items: start;
 
   @media (max-width: 900px) {
@@ -654,27 +770,45 @@ const AgendaInfo = styled.div`
   gap: 8px;
 `
 
+const BranchSelector = styled.div`
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+`
+
+const BranchOption = styled.button<{ $active: boolean }>`
+  border: 1px solid ${({ $active }) => ($active ? '#4338ca' : '#cbd5e1')};
+  background: ${({ $active }) => ($active ? '#eef2ff' : '#ffffff')};
+  color: ${({ $active }) => ($active ? '#312e81' : '#334155')};
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-weight: 700;
+  cursor: pointer;
+`
+
 const AgendaSubTitle = styled.p`
   margin: 0;
   color: #475569;
   font-size: 15px;
 `
 
+const CompareHint = styled.p`
+  margin: 0;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+`
+
 const ActionGroup = styled.div`
   display: grid;
-  gap: 14px;
+  gap: 10px;
 `
 
 const ButtonGroup = styled.div`
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
-  justify-content: flex-end;
-`
-
-const FirebaseBadge = styled.div`
-  display: inline-flex;
-  justify-content: flex-end;
+  justify-content: flex-start;
 `
 
 const DateNavigation = styled.div`
@@ -745,41 +879,85 @@ const SeedButton = styled.button`
 
 // Study screen moved to a dedicated StudiesScreen component
 
-const ScheduleGrid = styled.div`
+const ScheduleGrid = styled.div<{ $compareMode: boolean }>`
   display: grid;
   width: 100%;
-  overflow-x: auto;
+  overflow-x: ${({ $compareMode }) => ($compareMode ? 'hidden' : 'auto')};
+  overflow-y: visible;
   border-radius: 24px;
   border: 1px solid #000;
   background: #ffffff;
 `
 
-const ScheduleRowHeader = styled.div`
+const BranchAgendaStack = styled.div<{ $compareMode: boolean }>`
   display: grid;
-  grid-template-columns: 100px repeat(${columns.length}, minmax(120px, 1fr));
+  gap: 18px;
+
+  ${({ $compareMode }) =>
+    $compareMode &&
+    `
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+  `}
+
+  @media (max-width: 1180px) {
+    grid-template-columns: 1fr;
+  }
+`
+
+const BranchAgendaBlock = styled.section`
+  display: grid;
+  gap: 10px;
+`
+
+const BranchAgendaTitle = styled.button`
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  justify-self: start;
+  color: #0f172a;
+`
+
+const ScheduleRowHeader = styled.div<{ $columnsCount: number; $compact: boolean }>`
+  display: grid;
+  grid-template-columns: ${({ $columnsCount, $compact }) =>
+    $compact
+      ? `82px repeat(${$columnsCount}, minmax(0, 1fr))`
+      : `100px repeat(${$columnsCount}, minmax(120px, 1fr))`};
   background: #ffffff;
   padding: 0;
   gap: 0;
   border-bottom: 1px solid #000;
+  position: sticky;
+  top: 0;
+  z-index: 30;
 
   @media (max-width: 900px) {
-    grid-template-columns: 80px repeat(${columns.length}, minmax(100px, 1fr));
+    grid-template-columns: ${({ $columnsCount }) => `80px repeat(${$columnsCount}, minmax(100px, 1fr))`};
   }
   @media (max-width: 520px) {
-    grid-template-columns: 64px repeat(${columns.length}, minmax(80px, 1fr));
+    grid-template-columns: ${({ $columnsCount }) => `64px repeat(${$columnsCount}, minmax(80px, 1fr))`};
   }
 `
 
-const ScheduleRow = styled.div`
+const ScheduleRow = styled.div<{ $columnsCount: number; $compact: boolean }>`
   display: grid;
-  grid-template-columns: 100px repeat(${columns.length}, minmax(120px, 1fr));
+  grid-template-columns: ${({ $columnsCount, $compact }) =>
+    $compact
+      ? `82px repeat(${$columnsCount}, minmax(0, 1fr))`
+      : `100px repeat(${$columnsCount}, minmax(120px, 1fr))`};
   gap: 0;
+  align-items: stretch;
 
   @media (max-width: 900px) {
-    grid-template-columns: 80px repeat(${columns.length}, minmax(100px, 1fr));
+    grid-template-columns: ${({ $columnsCount }) => `80px repeat(${$columnsCount}, minmax(100px, 1fr))`};
   }
   @media (max-width: 520px) {
-    grid-template-columns: 64px repeat(${columns.length}, minmax(80px, 1fr));
+    grid-template-columns: ${({ $columnsCount }) => `64px repeat(${$columnsCount}, minmax(80px, 1fr))`};
   }
 `
 
@@ -792,6 +970,9 @@ const TimeHeader = styled.div`
   border-top: 1px solid #000;
   border-right: 1px solid #000;
   border-bottom: 1px solid #000;
+  position: sticky;
+  left: 0;
+  z-index: 31;
 
   @media (max-width: 520px) {
     padding: 10px 8px;
@@ -826,6 +1007,13 @@ const TimeCell = styled.div`
   border-top: 1px solid #000;
   border-left: 1px solid #000;
   border-bottom: 1px solid #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  position: sticky;
+  left: 0;
+  z-index: 20;
 
   @media (max-width: 520px) {
     padding: 10px 8px;
@@ -848,25 +1036,39 @@ const CellTooltip = styled.span`
   }
 `
 
-const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boolean; $isNew?: boolean; $continuesBelow?: boolean }>`
-  min-height: 76px;
+const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boolean; $isNew?: boolean; $continuesBelow?: boolean; $isLunch?: boolean; $isAfterHours?: boolean }>`
+  min-height: 92px;
   padding: 12px;
   border-left: 1px solid #000;
   border-right: 1px solid #000;
   border-top: ${({ $isBlocked }) => ($isBlocked ? 'none' : '1px solid #000')};
   border-bottom: ${({ $continuesBelow }) => ($continuesBelow ? 'none' : '1px solid #000')};
-  background: ${({ $hasAppointment, $isNew, $isBlocked }) =>
+  background: ${({ $hasAppointment, $isNew, $isBlocked, $isLunch, $isAfterHours }) =>
     $hasAppointment
       ? $isNew
         ? '#bbf7d0'
         : $isBlocked
         ? '#c5d5fb'
         : '#dbeafe'
+      : $isLunch
+      ? '#656e7a'
+      : $isAfterHours
+      ? '#8589a1'
       : '#ffffff'};
   position: relative;
   cursor: pointer;
   overflow: hidden;
   text-align: left;
+  border-radius: ${({ $hasAppointment, $isBlocked, $continuesBelow }) => {
+    if (!$hasAppointment) return '0';
+    if ($isBlocked) return $continuesBelow ? '0' : '0 0 14px 14px';
+    return $continuesBelow ? '14px 14px 0 0' : '14px';
+  }};
+
+  display: grid;
+  align-items: ${({ $hasAppointment }) => ($hasAppointment ? 'center' : 'stretch')};
+  justify-items: center;
+  padding: ${({ $hasAppointment }) => ($hasAppointment ? '18px 12px' : '12px')};
 
   &:hover {
     background: ${({ $hasAppointment, $isNew }) =>
@@ -887,34 +1089,39 @@ const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boole
   }
 
   @media (max-width: 900px) {
-    min-height: 64px;
+    min-height: 84px;
     padding: 8px;
   }
 `
 
 const CellContent = styled.div`
   display: grid;
-  gap: 4px;
+  gap: 6px;
+  justify-items: center;
+  align-items: center;
+  text-align: center;
 `
 
 const CellMeta = styled.div`
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 8px;
   align-items: center;
+  justify-content: center;
 `
 
 const IconBadge = styled.span`
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
-  min-height: 34px;
+  min-width: 42px;
+  min-height: 42px;
   border-radius: 999px;
   background: rgba(99, 102, 241, 0.16);
   color: #4338ca;
-  font-size: 16px;
-  padding: 4px;
+  font-size: 20px;
+  padding: 6px;
+  font-weight: 700;
 `
 
 const CellName = styled.span`
@@ -928,9 +1135,12 @@ const CellNote = styled.span`
   display: block;
   font-size: 12px;
   color: #475569;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 700;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+  max-width: 100%;
 `
 
 const CellStudy = styled.span`
@@ -938,6 +1148,18 @@ const CellStudy = styled.span`
   font-size: 12px;
   color: #2563eb;
   font-weight: 600;
+`
+
+const CellObservation = styled.span`
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  line-height: 1.25;
+  color: #334155;
+  max-width: 100%;
 `
 
 const HoverLabel = styled.span`
