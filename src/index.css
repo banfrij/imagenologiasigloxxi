@@ -2,6 +2,18 @@
   box-sizing: border-box;
 }
 
+/* Hide scrollbars globally while preserving scroll behavior. */
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+*::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
 html,
 body,
 #root {

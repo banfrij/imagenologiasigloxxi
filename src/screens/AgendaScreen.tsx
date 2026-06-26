@@ -89,6 +89,14 @@ export default function AgendaScreen() {
   const [newlyCreatedAppointmentId, setNewlyCreatedAppointmentId] = useState<number | null>(null)
   const [calendarCollapsed, setCalendarCollapsed] = useState(false)
   const [branchView, setBranchView] = useState<BranchView>('Alamos')
+  const [currentTime, setCurrentTime] = useState(() => new Date())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setCurrentTime(new Date())
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const seedFirstAppointment = async () => {
     if (branchView === 'Ambas') {
@@ -183,6 +191,7 @@ export default function AgendaScreen() {
   const currentMonth = activeDate.toLocaleString('es-ES', { month: 'long' })
   const currentDay = activeDate.getDate()
   const currentWeekday = activeDate.toLocaleString('es-ES', { weekday: 'long' })
+  const currentHourLabel = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
   const visibleBranches: BranchName[] = branchView === 'Ambas' ? [...BRANCHES] : [branchView]
   const branchViewLabel = branchView === 'Ambas' ? 'Álamos y San Felipe' : formatBranchLabel(branchView)
   const primaryBranch = branchView === 'Ambas' ? 'Alamos' : branchView
@@ -490,6 +499,7 @@ export default function AgendaScreen() {
                       isStartSlot ? (
                         <CellContent>
                           <CellName>{appointment.patient || 'Paciente'}</CellName>
+                          <CellAge>{appointment.age ? `${appointment.age} años` : 'Edad no registrada'}</CellAge>
                           <CellMeta>
                             {appointment.ambulance && <IconBadge title="Ambulancia">🚑</IconBadge>}
                             {appointment.sedation && <IconBadge title="Sedación">💤</IconBadge>}
@@ -560,7 +570,10 @@ export default function AgendaScreen() {
         <AgendaActions>
           <AgendaInfo>
             <AgendaTitle>Agenda</AgendaTitle>
-            <AgendaSubTitle>Sucursal {branchViewLabel} • {currentWeekday}, {currentMonth} {currentDay}</AgendaSubTitle>
+            <AgendaSubTitle>
+              Sucursal {branchViewLabel} • {currentWeekday}, {currentMonth} {currentDay}
+              <CurrentTimeBadge>{currentHourLabel}</CurrentTimeBadge>
+            </AgendaSubTitle>
             {branchView === 'Ambas' && (
               <CompareHint>Comparando horarios entre sucursales para distribuir mejor la carga.</CompareHint>
             )}
@@ -671,7 +684,7 @@ const CalendarCard = styled.div`
   justify-self: center;
   padding: 18px;
   border-radius: 20px;
-  background: #ffffff;
+  background: #a3e1fa;
   border: 1px solid #e5e7eb;
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
   display: grid;
@@ -788,8 +801,26 @@ const BranchOption = styled.button<{ $active: boolean }>`
 
 const AgendaSubTitle = styled.p`
   margin: 0;
-  color: #475569;
-  font-size: 15px;
+  color: #1f2937;
+  font-size: 19px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+`
+
+const CurrentTimeBadge = styled.span`
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: 14px;
+  font-weight: 800;
 `
 
 const CompareHint = styled.p`
@@ -886,7 +917,7 @@ const ScheduleGrid = styled.div<{ $compareMode: boolean }>`
   overflow-y: visible;
   border-radius: 24px;
   border: 1px solid #000;
-  background: #ffffff;
+  background: #c2e2f8;
 `
 
 const BranchAgendaStack = styled.div<{ $compareMode: boolean }>`
@@ -928,7 +959,7 @@ const ScheduleRowHeader = styled.div<{ $columnsCount: number; $compact: boolean 
     $compact
       ? `82px repeat(${$columnsCount}, minmax(0, 1fr))`
       : `100px repeat(${$columnsCount}, minmax(120px, 1fr))`};
-  background: #ffffff;
+  background: #a0e2f7;
   padding: 0;
   gap: 0;
   border-bottom: 1px solid #000;
@@ -1054,7 +1085,7 @@ const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boole
       ? '#656e7a'
       : $isAfterHours
       ? '#8589a1'
-      : '#ffffff'};
+      : '#dbd4d4'};
   position: relative;
   cursor: pointer;
   overflow: hidden;
@@ -1131,6 +1162,13 @@ const CellName = styled.span`
   font-size: 14px;
 `
 
+const CellAge = styled.span`
+  display: block;
+  font-size: 12px;
+  color: #334155;
+  font-weight: 600;
+`
+
 const CellNote = styled.span`
   display: block;
   font-size: 12px;
@@ -1185,16 +1223,16 @@ const ModalOverlay = styled.div`
   inset: 0;
   background: rgba(15, 23, 42, 0.48);
   display: grid;
-  place-items: center;
+  align-items: start;
+  justify-items: center;
   padding: 24px;
+  overflow-y: auto;
   z-index: 50;
 `
 
 const ModalContent = styled.div`
   width: min(760px, 100%);
-  max-height: min(90vh, 100%);
-  overflow-y: auto;
-  background: #f8fafc;
+  background: #b0c6dd;
   border-radius: 28px;
   box-shadow: 0 32px 72px rgba(15, 23, 42, 0.28);
   padding: 28px;

@@ -35,11 +35,133 @@ interface AppointmentFormProps {
   onDelete?: () => void
 }
 
+const withSimpleContrast = (studies: string[]) =>
+  studies.flatMap((name) => [`${name} SIMPLE`, `${name} CONTRASTADO`])
+
+const unique = (values: string[]) => Array.from(new Set(values))
+
+const rmBaseStudies = [
+  'ABDOMEN COMPLETO',
+  'ABDOMEN SUPERIOR',
+  'ABDOMEN INFERIOR',
+  'ANTEBRAZO',
+  'ARTICULACIONES SACROILIACAS',
+  'BRAZO',
+  'CADERA',
+  'COLUMNA CERVICAL',
+  'COLUMNA DORSAL O TORACICA',
+  'COLUMNA LUMBAR',
+  'CRANEO',
+  'CODO',
+  'CUELLO',
+  'FEMUR',
+  'HOMBRO',
+  'LENGUA',
+  'MACIZO FACIAL',
+  'MAMA',
+  'MANO',
+  'MUSLO/GLUTEO',
+  'MUÑECA',
+  'NARIZ',
+  'NEURO EJE (VERTEBRAL)',
+  'ORBITAS',
+  'PIERNA',
+  'PIE',
+  'PLEXO BRAQUIAL',
+  'PULMON',
+  'REGIÓN FLEURA',
+  'REGIÓN SELAR-SILLA TURCA',
+  'RODILLA',
+  'SACRO Y COXIGEA',
+  'SNC',
+  'TIBIA',
+  'TOBILLO',
+  'TORAX',
+]
+
+const rmAngioStudies = [
+  'ANGIORESONANCIA DE ABDOMEN COMPLETO',
+  'ANGIORESONANCIA DE ARTERIAS Y VENAS DE CRANEO',
+  'ANGIORESONANCIA DE ARTERIAS',
+  'ANGIORESONANCIA DE VENAS',
+  'ANGIORESONANCIA DE MIEMBROS PELVICOS',
+  'ANGIORESONANCIA DE AORTA TORACICA',
+  'ANGIORESONANCIA DE CUELLO',
+  'ANGIORESONANCIA DE TRONCOS SUPRA AORTICOS',
+  'ANGIORESONANCIA RENAL',
+  'URORESONANCIA',
+  'COLANGIORESONANCIA',
+]
+
+const rmTechniques = [
+  'EFECTO MIELOGRAFICO',
+  'ESPECTROSCOPIA O PROTOCOLO DE LOBULOS TEMPORALES',
+  'DIFUSION ADC',
+  'TECNICA FIESTA',
+  'TECNICA FLAIR O ECOGRADIENTE',
+  'TECNICA STIR',
+  'TECNICA BALANCE',
+  'PROTOCOLO DE PERFUSION O ESTERONQUE',
+  'PROTOCOLO DE HIPOCAMPOS O PROTOCOLO DE EPILEPSIA',
+  'PROTOCOLO PARA ISQUEMIA CEREBRAL',
+  'SECUENCIA ESTRONQUE SIMPLE Y CONTRASTADO',
+  'VOLUMEN CEREBRAL RELATIVO',
+  'PROTOCOLO DE STROKE GUIA A DIFUSION',
+]
+
+const tcBaseStudies = [
+  'ABDOMEN COMPLETO',
+  'ABDOMEN SUPERIOR',
+  'ABDOMEN INFERIOR',
+  'ANTEBRAZO',
+  'CADERA',
+  'CODO',
+  'CRANEO',
+  'COLUMNA CERVICAL',
+  'COLUMNA DORSAL O TORACICA',
+  'COLUMNA LUMBAR',
+  'CUELLO',
+  'FEMUR',
+  'HOMBRO',
+  'MANO',
+  'MUÑECA',
+  'OMOPLATO',
+  'PELVIS',
+  'PIERNA',
+  'RINONES',
+  'SENOS PARANASALES',
+  'SILLA TURCA AXIAL Y CORONAL',
+  'RODILLA',
+  'TOBILLO',
+  'TORAX',
+]
+
+const tcAngioStudies = [
+  'ANGIOTAC DE AORTA ABDOMINAL',
+  'ANGIOTAC DE AORTA TORACICA',
+  'ANGIOTAC CAROTIDEAS',
+  'ANGIOTAC CEREBRAL',
+  'ANGIOTAC DE MI',
+  'ANGIOTAC DE MPS PIERNAS',
+  'ANGIOTAC CIRCULACION CEREBRAL',
+  'ANGIOTAC MPI',
+  'UROTOMOGRAFIA',
+  'SINGLE DE CORONARIAS',
+]
+
+const tcSpecialStudies = [
+  'SCORE DE CALCIO',
+  'PANCREAS DINAMICO',
+  'TAC DE CRANEO SIMPLE Y RECONSTRUCCION',
+  'TAC DE OIDOS SIMPLE',
+  'TAC DE OIDOS SIMPLE 2 CORTES VENTANA OSEA',
+]
+
 const studyOptions: Record<AppointmentData['technique'], string[]> = {
-  RM: ['RM Columna', 'RM Craneal', 'RM Abdominal'],
-  TC: ['TC Abdomen', 'TC Craneal', 'TC Tórax'],
-  'Rayos X': ['Rx Tórax', 'Rx Abdominal', 'Rx Columna'],
-  Ultrasonido: ['US Abdomen', 'US Músculo-esquelético', 'US Doppler'],
+  RM: unique([...withSimpleContrast([...rmBaseStudies, ...rmAngioStudies]), ...rmTechniques]),
+  TC: unique([...withSimpleContrast([...tcBaseStudies, ...tcAngioStudies]), ...tcSpecialStudies]),
+  'Rayos X': ['RXUSG SIMPLE', 'RXUSG CONTRASTADO'],
+  Ultrasonido: ['RXUSG SIMPLE', 'RXUSG CONTRASTADO'],
 }
 
 export default function AppointmentForm({ technique, time, initialData, onSave, onCancel, onDelete }: AppointmentFormProps) {
@@ -56,10 +178,17 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
   const [observation, setObservation] = useState(initialData?.observation ?? '')
   const [errors, setErrors] = useState<string[]>([])
 
+  const activeStudyOptions = studyOptions[technique]
+  const studyQuery = study.trim().toLowerCase()
+  const quickSuggestions = activeStudyOptions
+    .filter((option) => !studyQuery || option.toLowerCase().includes(studyQuery))
+    .slice(0, 14)
+
   const validateForm = () => {
     const validationErrors: string[] = []
 
-    if (!study.trim()) validationErrors.push('El estudio es obligatorio.')
+    const effectiveStudy = study.trim()
+    if (!effectiveStudy) validationErrors.push('El estudio es obligatorio.')
     if (!duration.trim()) validationErrors.push('La duración es obligatoria.')
     if (!patient.trim()) validationErrors.push('El nombre del paciente es obligatorio.')
     if (!age.trim()) validationErrors.push('La edad es obligatoria.')
@@ -82,7 +211,7 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
     setErrors([])
     onSave({
       technique,
-      study,
+      study: study.trim(),
       duration,
       patient,
       age,
@@ -115,11 +244,29 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
       <FormGrid onSubmit={handleSubmit}>
         <FormGroup>
           <FormLabel htmlFor="study">Estudio</FormLabel>
-          <FormSelect id="study" value={study} onChange={(event) => setStudy(event.target.value)} required>
-            {studyOptions[technique].map((option) => (
-              <option key={option} value={option}>{option}</option>
+          <FormInput
+            id="study"
+            list="study-options"
+            value={study}
+            onChange={(event) => setStudy(event.target.value)}
+            placeholder="Buscar o escribir estudio"
+            required
+          />
+          <FieldHint>Busca en el catalogo o escribe libremente si no aparece.</FieldHint>
+          <datalist id="study-options">
+            {activeStudyOptions.map((option) => (
+              <option key={option} value={option} />
             ))}
-          </FormSelect>
+          </datalist>
+          {quickSuggestions.length > 0 && (
+            <SuggestionsWrap>
+              {quickSuggestions.map((option) => (
+                <SuggestionChip key={option} type="button" onClick={() => setStudy(option)}>
+                  {option}
+                </SuggestionChip>
+              ))}
+            </SuggestionsWrap>
+          )}
         </FormGroup>
 
         <FormGroup>
@@ -292,6 +439,32 @@ const FormSelect = styled.select`
   border: 1px solid #d1d5db;
   border-radius: 14px;
   background: #f8fafc;
+`
+
+const FieldHint = styled.span`
+  color: #64748b;
+  font-size: 12px;
+`
+
+const SuggestionsWrap = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+`
+
+const SuggestionChip = styled.button`
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #1f2937;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+
+  &:hover {
+    background: #e2e8f0;
+  }
 `
 
 const FormTextArea = styled.textarea`
