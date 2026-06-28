@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where } from 'firebase/firestore'
 import styled from 'styled-components'
 import AppointmentForm, { type AppointmentData, type AppointmentFormValues } from '../components/AppointmentForm'
-import { db } from '../firebase'
+import { auth, db } from '../firebase'
 
 const BRANCHES = ['Alamos', 'San Felipe'] as const
 type BranchName = (typeof BRANCHES)[number]
@@ -64,6 +64,41 @@ function isSameDate(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
 }
 
+function toDateOnly(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12, 0, 0, 0)
+}
+
+function formatLocalDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function clampToAgendaYear(date: Date) {
+  const min = new Date(2026, 0, 1, 12, 0, 0, 0)
+  const max = new Date(2026, 11, 31, 12, 0, 0, 0)
+  if (date < min) return min
+  if (date > max) return max
+  return date
+}
+
+function formatUserTag(value?: string) {
+  if (!value) return 'N/D'
+  return value.split('@')[0]
+}
+
+function formatDateTimeFromIso(value?: string) {
+  if (!value) return '--:--'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '--:--'
+  const day = String(date.getDate()).padStart(2, '0')
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const year = date.getFullYear()
+  const hour = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
+  return `${day}/${month}/${year} ${hour}`
+}
+
 type SelectedSlot = {
   branch: BranchName
   technique: AppointmentData['technique']
@@ -74,7 +109,7 @@ type SelectedSlot = {
 const STORAGE_KEY = 'ImgXXI_AgendaAppointments'
 
 export default function AgendaScreen() {
-  const [activeDate, setActiveDate] = useState(() => new Date())
+  const [activeDate, setActiveDate] = useState(() => clampToAgendaYear(toDateOnly(new Date())))
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const initial = new Date()
     initial.setFullYear(2026)
@@ -97,6 +132,12 @@ export default function AgendaScreen() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  const applyActiveDate = (date: Date) => {
+    const normalized = clampToAgendaYear(toDateOnly(date))
+    setActiveDate(normalized)
+    setCalendarMonth(new Date(2026, normalized.getMonth(), 1))
+  }
 
   const seedFirstAppointment = async () => {
     if (branchView === 'Ambas') {
@@ -139,6 +180,7 @@ export default function AgendaScreen() {
     const firestoreId = await saveAppointmentToFirestore(newAppointment)
     const appointmentWithDocId = firestoreId ? { ...newAppointment, firestoreId } : newAppointment
     syncAppointments([...appointments, appointmentWithDocId])
+    await logAppointmentAudit('AGENDO', appointmentWithDocId)
     setNextAppointmentId((current) => current + 1)
     setNewlyCreatedAppointmentId(newAppointment.id)
     window.setTimeout(() => setNewlyCreatedAppointmentId(null), 8000)
@@ -172,11 +214,18 @@ export default function AgendaScreen() {
             firestoreId: document.id,
           }))
 
-          setAppointments(firestoreAppointments)
+          const mergedAppointments = [
+            ...firestoreAppointments,
+            ...storedAppointments.filter(
+              (stored) => !firestoreAppointments.some((remote) => remote.id === stored.id),
+            ),
+          ]
+
+          setAppointments(mergedAppointments)
           setNextAppointmentId(
-            firestoreAppointments.reduce((max, item) => Math.max(max, item.id), -1) + 1,
+            mergedAppointments.reduce((max, item) => Math.max(max, item.id), -1) + 1,
           )
-          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(firestoreAppointments))
+          window.localStorage.setItem(STORAGE_KEY, JSON.stringify(mergedAppointments))
         }
       } catch (error) {
         console.error('Error cargando citas de Firestore:', error)
@@ -186,7 +235,7 @@ export default function AgendaScreen() {
     void loadAppointments()
   }, [])
 
-  const activeDateString = activeDate.toISOString().slice(0, 10)
+  const activeDateString = formatLocalDateKey(activeDate)
   const calendarGrid = buildCalendarGrid(calendarMonth)
   const currentMonth = activeDate.toLocaleString('es-ES', { month: 'long' })
   const currentDay = activeDate.getDate()
@@ -210,11 +259,9 @@ export default function AgendaScreen() {
   }
 
   const changeDateByDays = (days: number) => {
-    setActiveDate((date) => {
-      const next = new Date(date)
-      next.setDate(next.getDate() + days)
-      return next
-    })
+    const next = toDateOnly(activeDate)
+    next.setDate(next.getDate() + days)
+    applyActiveDate(next)
   }
 
   const changeCalendarMonth = (months: number) => {
@@ -319,6 +366,8 @@ export default function AgendaScreen() {
 
   const appointmentPayload = (appointment: AppointmentData) => {
     const start = timeStringToMinutes(appointment.time)
+    const userEmail = auth.currentUser?.email ?? 'desconocido'
+    const nowIso = new Date().toISOString()
     const payload: Omit<AppointmentData, 'firestoreId'> & { startTimeMinutes: number; endTimeMinutes: number } = {
       id: appointment.id,
       time: appointment.time,
@@ -336,6 +385,10 @@ export default function AgendaScreen() {
       oxygen: appointment.oxygen,
       noteTitle: appointment.noteTitle,
       observation: appointment.observation,
+      createdBy: appointment.createdBy ?? userEmail,
+      createdAt: appointment.createdAt ?? nowIso,
+      updatedBy: userEmail,
+      updatedAt: nowIso,
       startTimeMinutes: start,
       endTimeMinutes: start + durationToMinutes(appointment.duration),
     }
@@ -355,6 +408,29 @@ export default function AgendaScreen() {
     } catch (error) {
       console.error('Error guardando cita en Firestore:', error)
       return null
+    }
+  }
+
+  const logAppointmentAudit = async (
+    action: 'AGENDO' | 'CANCELO',
+    appointment: AppointmentData,
+    reason?: string,
+  ) => {
+    try {
+      await addDoc(collection(db, 'appointment_audit'), {
+        action,
+        user: auth.currentUser?.email ?? 'desconocido',
+        idEstudio: appointment.id,
+        study: appointment.study,
+        patient: appointment.patient,
+        branch: appointment.branch ?? 'Alamos',
+        date: appointment.date,
+        time: appointment.time,
+        reason: reason?.trim() || null,
+        createdAt: new Date().toISOString(),
+      })
+    } catch (error) {
+      console.error('Error guardando bitácora de citas:', error)
     }
   }
 
@@ -405,6 +481,8 @@ export default function AgendaScreen() {
           appointment.id === updatedAppointment.id ? { ...appointment, firestoreId } : appointment,
         )
         syncAppointments(appointmentsWithDocId)
+      } else if (!firestoreId) {
+        window.alert('No se pudo actualizar en Firestore. La cita quedó local y puede perderse al recargar.')
       }
     } else {
       const newAppointment: AppointmentData = {
@@ -417,6 +495,10 @@ export default function AgendaScreen() {
       const firestoreId = await saveAppointmentToFirestore(newAppointment)
       const appointmentWithDocId = firestoreId ? { ...newAppointment, firestoreId } : newAppointment
       syncAppointments([...appointments, appointmentWithDocId])
+      if (!firestoreId) {
+        window.alert('No se pudo guardar en Firestore. La cita quedó local y puede perderse al recargar.')
+      }
+      await logAppointmentAudit('AGENDO', appointmentWithDocId)
       setNextAppointmentId((current) => current + 1)
       setNewlyCreatedAppointmentId(newAppointment.id)
       if (typeof window !== 'undefined') {
@@ -429,6 +511,37 @@ export default function AgendaScreen() {
 
   const handleDeleteAppointment = async () => {
     if (!selectedCell?.appointment) return
+
+    const confirmed = window.confirm('¿Seguro que deseas cancelar esta cita?')
+    if (!confirmed) return
+
+    const reason = window.prompt('Especifica la razón de cancelación:')
+    if (reason === null) return
+
+    const trimmedReason = reason.trim()
+    if (!trimmedReason) {
+      window.alert('Debes especificar una razón para cancelar la cita.')
+      return
+    }
+
+    try {
+      await addDoc(collection(db, 'appointment_cancellations'), {
+        appointmentId: selectedCell.appointment.id,
+        firestoreId: selectedCell.appointment.firestoreId ?? null,
+        patient: selectedCell.appointment.patient,
+        branch: selectedCell.appointment.branch ?? 'Alamos',
+        technique: selectedCell.appointment.technique,
+        date: selectedCell.appointment.date,
+        time: selectedCell.appointment.time,
+        reason: trimmedReason,
+        cancelledBy: auth.currentUser?.email ?? 'desconocido',
+        cancelledAt: new Date().toISOString(),
+      })
+    } catch (error) {
+      console.error('Error guardando motivo de cancelación:', error)
+    }
+
+    await logAppointmentAudit('CANCELO', selectedCell.appointment, trimmedReason)
 
     await deleteAppointmentFromFirestore(selectedCell.appointment)
     syncAppointments(appointments.filter((appointment) => appointment.id !== selectedCell.appointment!.id))
@@ -468,12 +581,15 @@ export default function AgendaScreen() {
               {branchColumns.map((column) => {
                 const appointment = getAppointmentCoveringSlot(branch, column, time)
                 const isStartSlot = appointment?.time === time
+                const appointmentSlots = appointment
+                  ? getSlotTimes(appointment.time, durationToMinutes(appointment.duration))
+                  : []
+                const continuationIndex = appointment ? appointmentSlots.indexOf(time) : -1
+                const isFirstContinuationSlot = continuationIndex === 1
                 const isNew = appointment ? appointment.id === newlyCreatedAppointmentId : false
                 const continuesBelow = Boolean(
                   appointment &&
-                    getSlotTimes(appointment.time, durationToMinutes(appointment.duration)).includes(
-                      timeLabels[rowIndex + 1] ?? '',
-                    ),
+                    appointmentSlots.includes(timeLabels[rowIndex + 1] ?? ''),
                 )
                 const isLunch = time === '14:00' || time === '14:30'
                 const hour = parseInt(time.split(':')[0], 10)
@@ -505,10 +621,15 @@ export default function AgendaScreen() {
                             {appointment.sedation && <IconBadge title="Sedación">💤</IconBadge>}
                             {appointment.oxygen && <IconBadge title="Tanque de oxígeno">🛢️</IconBadge>}
                           </CellMeta>
-                          <CellNote>{appointment.noteTitle}</CellNote>
+                          <CellNote>{`Tel: ${appointment.number || 'N/D'}`}</CellNote>
                           <CellStudy>{appointment.study}</CellStudy>
                           <CellObservation>{appointment.observation}</CellObservation>
+                          <CellAudit>
+                            {formatUserTag(appointment.createdBy)} · {formatDateTimeFromIso(appointment.createdAt)}
+                          </CellAudit>
                         </CellContent>
+                      ) : isFirstContinuationSlot ? (
+                        <ContinuationNote>{appointment.noteTitle}</ContinuationNote>
                       ) : null
                     ) : (
                       <CellTooltip className="cell-tooltip">+</CellTooltip>
@@ -558,7 +679,7 @@ export default function AgendaScreen() {
                   type="button"
                   $active={isActive}
                   $outside={!isInMonth}
-                  onClick={() => setActiveDate(day)}
+                  onClick={() => applyActiveDate(day)}
                 >
                   {day.getDate()}
                 </CalendarDay>
@@ -612,7 +733,7 @@ export default function AgendaScreen() {
               <FullscreenButton type="button" onClick={toggleFullscreen}>
                 {fullscreen ? 'Salir full' : 'Pantalla completa'}
               </FullscreenButton>
-              {branchView !== 'Ambas' && !hasAppointmentsInPrimaryBranch && (
+              {branchView === 'Alamos' && !hasAppointmentsInPrimaryBranch && (
                 <SeedButton type="button" onClick={seedFirstAppointment}>
                   Primer paciente
                 </SeedButton>
@@ -622,7 +743,11 @@ export default function AgendaScreen() {
               <DateButton type="button" onClick={() => changeDateByDays(-1)}>
                 ← Día anterior
               </DateButton>
-              <DateButton type="button" onClick={() => setActiveDate(new Date())} disabled={isActiveDateToday}>
+              <DateButton
+                type="button"
+                onClick={() => applyActiveDate(new Date())}
+                disabled={isActiveDateToday}
+              >
                 Hoy
               </DateButton>
               <DateButton type="button" onClick={() => changeDateByDays(1)}>
@@ -1198,6 +1323,24 @@ const CellObservation = styled.span`
   line-height: 1.25;
   color: #334155;
   max-width: 100%;
+`
+
+const CellAudit = styled.span`
+  display: block;
+  margin-top: 4px;
+  font-size: 10px;
+  color: #0f172a;
+  font-weight: 700;
+  opacity: 0.85;
+`
+
+const ContinuationNote = styled.span`
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #334155;
+  text-align: center;
+  padding: 6px 8px;
 `
 
 const HoverLabel = styled.span`

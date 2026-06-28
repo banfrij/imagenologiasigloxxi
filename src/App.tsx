@@ -6,8 +6,10 @@ import LoginPanel from './components/auth/LoginPanel'
 import DashboardLayout from './components/layout/DashboardLayout'
 import AgendaScreen from './screens/AgendaScreen'
 import StudiesScreen from './screens/StudiesScreen'
+import PacientesScreen from './screens/Pacientes'
 import HomeScreen from './screens/HomeScreen'
 import PlaceholderScreen from './screens/PlaceholderScreen'
+import ReportesScreen from './screens/ReportesScreen'
 import { auth } from './firebase'
 import { isAllowedEmail } from './constants/auth'
 
@@ -95,11 +97,11 @@ function App() {
       case 'interpretaciones':
         return <PlaceholderScreen title="Interpretaciones" description="Interpretaciones y resultados próximamente." />
       case 'pacientes':
-        return <PlaceholderScreen title="Pacientes" description="Listado y detalles de pacientes próximamente." />
+        return <PacientesScreen />
       case 'traslados':
         return <PlaceholderScreen title="Traslados" description="Gestión de traslados próximamente." />
       case 'reportes':
-        return <PlaceholderScreen title="Reportes" description="Reportes y estadísticas próximamente." />
+        return <ReportesScreen />
       default:
         return <HomeScreen />
     }

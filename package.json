@@ -16,6 +16,8 @@
     "date-fns": "^4.4.0",
     "dotenv": "^17.4.2",
     "firebase": "^12.15.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "styled-components": "^6.4.2",

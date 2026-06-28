@@ -24,6 +24,10 @@ export type AppointmentData = AppointmentFormValues & {
   firestoreId?: string
   startTimeMinutes?: number
   endTimeMinutes?: number
+  createdBy?: string
+  createdAt?: string
+  updatedBy?: string
+  updatedAt?: string
 }
 
 interface AppointmentFormProps {

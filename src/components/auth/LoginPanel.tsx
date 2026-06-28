@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react'
 import styled from 'styled-components'
 import { signInWithEmailAndPassword } from 'firebase/auth'
 import { auth } from '../../firebase'
-import { isAllowedEmail } from '../../constants/auth'
+import { allowedEmails, isAllowedEmail } from '../../constants/auth'
 
 const getAuthErrorMessage = (code: string) => {
   switch (code) {
@@ -30,7 +30,7 @@ export default function LoginPanel() {
 
     const normalizedEmail = email.trim().toLowerCase()
     if (!isAllowedEmail(normalizedEmail)) {
-      setError('Solo tienen acceso: alamosxxi@gmail.com y sanfexxi@gmail.com.')
+      setError(`Solo tienen acceso: ${allowedEmails.join(', ')}.`)
       return
     }
 
