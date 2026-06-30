@@ -39,6 +39,63 @@ interface AppointmentFormProps {
   onDelete?: () => void
 }
 
+const DURATION_OPTIONS_MINUTES = [30, 60, 90, 120, 150, 180, 210]
+
+const toDurationLabel = (minutes: number) => {
+  if (minutes < 60) return `${minutes} min`
+
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  if (remainingMinutes === 0) return `${hours}hr`
+  return `${hours}hr ${remainingMinutes} min`
+}
+
+const normalizeDurationToMinutesLabel = (duration?: string) => {
+  if (!duration) return toDurationLabel(60)
+
+  const value = duration.trim().toLowerCase().replace(',', '.')
+
+  const mixedMatch = value.match(/^(\d+)\s*h(?:r)?\s*(\d+)\s*min$/)
+  if (mixedMatch) {
+    const total = Number(mixedMatch[1]) * 60 + Number(mixedMatch[2])
+    if (DURATION_OPTIONS_MINUTES.includes(total)) return toDurationLabel(total)
+  }
+
+  const minutesMatch = value.match(/^(\d+)\s*min$/)
+  if (minutesMatch) {
+    const parsed = Number(minutesMatch[1])
+    if (DURATION_OPTIONS_MINUTES.includes(parsed)) return toDurationLabel(parsed)
+  }
+
+  const hoursMatch = value.match(/^(\d+)(?:[.:](\d+))?\s*h(?:r)?$/)
+  if (hoursMatch) {
+    const hours = Number(hoursMatch[1])
+    const fraction = hoursMatch[2]
+    let extraMinutes = 0
+
+    if (fraction) {
+      if (fraction.length === 1) {
+        extraMinutes = Math.round(Number(`0.${fraction}`) * 60)
+      } else {
+        const maybeMinutes = Number(fraction)
+        extraMinutes = maybeMinutes < 60 ? maybeMinutes : Math.round(Number(`0.${fraction}`) * 60)
+      }
+    }
+
+    const total = hours * 60 + extraMinutes
+    if (DURATION_OPTIONS_MINUTES.includes(total)) return toDurationLabel(total)
+  }
+
+  if (value === '1.5 hr') return toDurationLabel(90)
+  if (value === '1.30 hr') return toDurationLabel(90)
+  if (value === '1 hr') return toDurationLabel(60)
+  if (value === '1hr') return toDurationLabel(60)
+  if (value === '2 hr') return toDurationLabel(120)
+  if (value === '2hr') return toDurationLabel(120)
+
+  return toDurationLabel(60)
+}
+
 const withSimpleContrast = (studies: string[]) =>
   studies.flatMap((name) => [`${name} SIMPLE`, `${name} CONTRASTADO`])
 
@@ -170,7 +227,7 @@ const studyOptions: Record<AppointmentData['technique'], string[]> = {
 
 export default function AppointmentForm({ technique, time, initialData, onSave, onCancel, onDelete }: AppointmentFormProps) {
   const [study, setStudy] = useState(initialData?.study ?? studyOptions[technique][0])
-  const [duration, setDuration] = useState(initialData?.duration ?? '1 hr')
+  const [duration, setDuration] = useState(normalizeDurationToMinutesLabel(initialData?.duration))
   const [patient, setPatient] = useState(initialData?.patient ?? '')
   const [age, setAge] = useState(initialData?.age ?? '')
   const [number, setNumber] = useState(initialData?.number ?? '')
@@ -216,7 +273,7 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
     onSave({
       technique,
       study: study.trim(),
-      duration,
+      duration: normalizeDurationToMinutesLabel(duration),
       patient,
       age,
       number,
@@ -276,10 +333,14 @@ export default function AppointmentForm({ technique, time, initialData, onSave, 
         <FormGroup>
           <FormLabel htmlFor="duration">Duración</FormLabel>
           <FormSelect id="duration" value={duration} onChange={(event) => setDuration(event.target.value)} required>
-            <option>30 min</option>
-            <option>1 hr</option>
-            <option>1.5 hr</option>
-            <option>2 hr</option>
+            {DURATION_OPTIONS_MINUTES.map((minutes) => {
+              const label = toDurationLabel(minutes)
+              return (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              )
+            })}
           </FormSelect>
         </FormGroup>
 

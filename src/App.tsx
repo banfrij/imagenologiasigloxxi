@@ -63,7 +63,7 @@ const GlobalStyle = createGlobalStyle`
 function App() {
   const [user, setUser] = useState<User | null>(null)
   const [isAuthLoading, setIsAuthLoading] = useState(true)
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [activeSection, setActiveSection] = useState<SidebarItem['section']>('agenda')
 
   useEffect(() => {
@@ -80,6 +80,30 @@ function App() {
     })
 
     return () => unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    const handleToggleSidebarShortcut = (event: KeyboardEvent) => {
+      if (event.repeat || event.ctrlKey || event.metaKey || event.altKey) return
+
+      const target = event.target as HTMLElement | null
+      const isTypingContext = Boolean(
+        target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.tagName === 'SELECT' ||
+            target.isContentEditable),
+      )
+      if (isTypingContext) return
+
+      if (event.key.toLowerCase() !== 'd') return
+
+      event.preventDefault()
+      setSidebarOpen((value) => !value)
+    }
+
+    document.addEventListener('keydown', handleToggleSidebarShortcut)
+    return () => document.removeEventListener('keydown', handleToggleSidebarShortcut)
   }, [])
 
   const handleLogout = () => {

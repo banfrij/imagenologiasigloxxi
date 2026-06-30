@@ -19,6 +19,36 @@ service cloud.firestore {
       return request.auth != null && hasAllowedEmail();
     }
 
+    function userEmail() {
+      return request.auth.token.email.lower();
+    }
+
+    function isCrossBranchAdmin() {
+      return userEmail() in [
+        'alamosxxi@gmail.com',
+        'sanfexxi@gmail.com'
+      ];
+    }
+
+    function canAccessBranch(branch) {
+      return isCrossBranchAdmin()
+        || (
+          branch == 'Alamos'
+          && userEmail() in [
+            'alamos04u@gmail.com',
+            'alamos01m@gmail.com',
+            'alamos02m@gmail.com',
+            'alamos03t@gmail.com'
+          ]
+        )
+        || (
+          branch == 'San Felipe'
+          && userEmail() in [
+            'sanfe01f@gmail.com'
+          ]
+        );
+    }
+
     function isNonEmptyString(value) {
       return value is string && value != '';
     }
@@ -50,6 +80,21 @@ service cloud.firestore {
     match /appointment_audit/{eventId} {
       allow read, create: if isSignedIn() && validateAppointmentAudit(request.resource.data);
       allow update, delete: if false;
+    }
+
+    match /agenda_color_marks/{markId} {
+      allow read: if isSignedIn() && canAccessBranch(resource.data.branch);
+      allow create, update: if isSignedIn()
+        && validateColorMark(request.resource.data)
+        && canAccessBranch(request.resource.data.branch)
+        && request.resource.data.createdBy == request.auth.token.email
+        && request.resource.id == buildColorMarkId(
+          request.resource.data.date,
+          request.resource.data.branch,
+          request.resource.data.column,
+          request.resource.data.time
+        );
+      allow delete: if isSignedIn() && canAccessBranch(resource.data.branch);
     }
 
     function validateAppointment(data) {
@@ -144,6 +189,37 @@ service cloud.firestore {
         && isNonEmptyString(data.time)
         && (data.reason == null || isNonEmptyString(data.reason))
         && isNonEmptyString(data.createdAt);
+    }
+
+    function buildColorMarkId(date, branch, column, time) {
+      return date + '_' + branch + '_' + column + '_' + time;
+    }
+
+    function validateColorMark(data) {
+      return data is map
+        && data.keys().hasAll([
+          'id',
+          'date',
+          'branch',
+          'column',
+          'time',
+          'color',
+          'colorLabel',
+          'note',
+          'createdBy',
+          'createdAt'
+        ])
+        && isNonEmptyString(data.id)
+        && isNonEmptyString(data.date)
+        && (data.branch == 'Alamos' || data.branch == 'San Felipe')
+        && (data.column == 'RM' || data.column == 'TC' || data.column == 'RXUSG')
+        && isNonEmptyString(data.time)
+        && isNonEmptyString(data.color)
+        && isNonEmptyString(data.colorLabel)
+        && isNonEmptyString(data.note)
+        && isNonEmptyString(data.createdBy)
+        && isNonEmptyString(data.createdAt)
+        && data.id == buildColorMarkId(data.date, data.branch, data.column, data.time);
     }
   }
 }

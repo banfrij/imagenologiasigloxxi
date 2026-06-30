@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { addDoc, collection, deleteDoc, doc, getDocs, query, updateDoc, where } from 'firebase/firestore'
+import { useEffect, useRef, useState } from 'react'
+import { addDoc, collection, deleteDoc, doc, getDocs, onSnapshot, query, setDoc, updateDoc, where } from 'firebase/firestore'
 import styled from 'styled-components'
 import AppointmentForm, { type AppointmentData, type AppointmentFormValues } from '../components/AppointmentForm'
 import { auth, db } from '../firebase'
@@ -106,7 +106,34 @@ type SelectedSlot = {
   appointment?: AppointmentData
 }
 
+type ToolColor = {
+  value: string
+  label: string
+}
+
+type CellColorMark = {
+  id: string
+  date: string
+  branch: BranchName
+  column: ScheduleColumn
+  time: string
+  color: string
+  colorLabel: string
+  note: string
+  createdBy: string
+  createdAt: string
+}
+
 const STORAGE_KEY = 'ImgXXI_AgendaAppointments'
+const COLOR_MARKS_STORAGE_KEY = 'ImgXXI_AgendaColorMarks'
+const COLOR_MARKS_COLLECTION = 'agenda_color_marks'
+
+const TOOL_COLORS: ToolColor[] = [
+  { value: '#f59e0b', label: 'Ausencia parcial' },
+  { value: '#ef4444', label: 'Técnico ausente' },
+  { value: '#22c55e', label: 'Disponible' },
+  { value: '#3b82f6', label: 'Mantenimiento' },
+]
 
 export default function AgendaScreen() {
   const [activeDate, setActiveDate] = useState(() => clampToAgendaYear(toDateOnly(new Date())))
@@ -125,6 +152,22 @@ export default function AgendaScreen() {
   const [calendarCollapsed, setCalendarCollapsed] = useState(false)
   const [branchView, setBranchView] = useState<BranchView>('Alamos')
   const [currentTime, setCurrentTime] = useState(() => new Date())
+  const [selectedToolColor, setSelectedToolColor] = useState<ToolColor | null>(null)
+  const [isColorPaletteOpen, setIsColorPaletteOpen] = useState(false)
+  const [toolNote, setToolNote] = useState('')
+  const [colorMarks, setColorMarks] = useState<CellColorMark[]>(() => {
+    if (typeof window === 'undefined') return []
+    const raw = window.localStorage.getItem(COLOR_MARKS_STORAGE_KEY)
+    if (!raw) return []
+    try {
+      const parsed = JSON.parse(raw) as CellColorMark[]
+      return Array.isArray(parsed) ? parsed : []
+    } catch {
+      return []
+    }
+  })
+  const rowRefs = useRef<Record<string, HTMLDivElement | null>>({})
+  const floatingToolsRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -132,6 +175,19 @@ export default function AgendaScreen() {
     }, 1000)
     return () => window.clearInterval(timer)
   }, [])
+
+  useEffect(() => {
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!isColorPaletteOpen) return
+      const target = event.target as Node | null
+      if (!target) return
+      if (floatingToolsRef.current?.contains(target)) return
+      setIsColorPaletteOpen(false)
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    return () => document.removeEventListener('mousedown', handleOutsideClick)
+  }, [isColorPaletteOpen])
 
   const applyActiveDate = (date: Date) => {
     const normalized = clampToAgendaYear(toDateOnly(date))
@@ -241,9 +297,43 @@ export default function AgendaScreen() {
   const currentDay = activeDate.getDate()
   const currentWeekday = activeDate.toLocaleString('es-ES', { weekday: 'long' })
   const currentHourLabel = currentTime.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
+  const currentUserLabel = formatUserTag(auth.currentUser?.email ?? 'N/D')
   const visibleBranches: BranchName[] = branchView === 'Ambas' ? [...BRANCHES] : [branchView]
   const branchViewLabel = branchView === 'Ambas' ? 'Álamos y San Felipe' : formatBranchLabel(branchView)
   const primaryBranch = branchView === 'Ambas' ? 'Alamos' : branchView
+
+  useEffect(() => {
+    const marksQuery = query(
+      collection(db, COLOR_MARKS_COLLECTION),
+      where('date', '==', activeDateString),
+    )
+
+    const unsubscribe = onSnapshot(
+      marksQuery,
+      (snapshot) => {
+        const remoteMarks = snapshot.docs.map((document) => {
+          const data = document.data() as Omit<CellColorMark, 'id'>
+          return {
+            ...data,
+            id: document.id,
+          }
+        })
+
+        setColorMarks((current) => {
+          const next = [...current.filter((mark) => mark.date !== activeDateString), ...remoteMarks]
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem(COLOR_MARKS_STORAGE_KEY, JSON.stringify(next))
+          }
+          return next
+        })
+      },
+      (error) => {
+        console.error('Error sincronizando marcas de color en Firestore:', error)
+      },
+    )
+
+    return () => unsubscribe()
+  }, [activeDateString])
 
   const today = new Date()
   const isActiveDateToday = activeDate.toDateString() === today.toDateString()
@@ -257,6 +347,25 @@ export default function AgendaScreen() {
       setFullscreen(true)
     }
   }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null
+      const isTypingInField = Boolean(
+        target &&
+          (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable),
+      )
+
+      if (isTypingInField || event.ctrlKey || event.metaKey || event.altKey) return
+      if (event.key.toLowerCase() !== 'f') return
+
+      event.preventDefault()
+      void toggleFullscreen()
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const changeDateByDays = (days: number) => {
     const next = toDateOnly(activeDate)
@@ -295,9 +404,29 @@ export default function AgendaScreen() {
     }, {} as Record<ScheduleColumn, boolean>)
 
   const durationToMinutes = (duration: string) => {
-    if (duration === '2 hr') return 120
-    if (duration === '1.5 hr') return 90
-    if (duration === '1 hr') return 60
+    const value = duration.trim().toLowerCase().replace(',', '.')
+
+    const mixedMatch = value.match(/^(\d+)\s*h(?:r)?\s*(\d+)\s*min$/)
+    if (mixedMatch) return Number(mixedMatch[1]) * 60 + Number(mixedMatch[2])
+
+    const minutesMatch = value.match(/^(\d+)\s*min$/)
+    if (minutesMatch) return Number(minutesMatch[1])
+
+    const hoursMatch = value.match(/^(\d+)(?:[.:](\d+))?\s*h(?:r)?$/)
+    if (hoursMatch) {
+      const hours = Number(hoursMatch[1])
+      const fraction = hoursMatch[2]
+      if (!fraction) return hours * 60
+
+      const maybeMinutes = Number(fraction)
+      const extraMinutes = maybeMinutes < 60 ? maybeMinutes : Math.round(Number(`0.${fraction}`) * 60)
+      return hours * 60 + extraMinutes
+    }
+
+    if (value === '1.5 hr') return 90
+    if (value === '1.30 hr') return 90
+    if (value === '1 hr') return 60
+    if (value === '2 hr') return 120
     return 30
   }
 
@@ -552,7 +681,172 @@ export default function AgendaScreen() {
     setSelectedCell(null)
   }
 
-  const renderBranchSchedule = (branch: BranchName) => {
+  useEffect(() => {
+    if (!selectedCell) return
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        handleCancel()
+      }
+    }
+
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [selectedCell])
+
+  useEffect(() => {
+    if (!selectedCell) return
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [selectedCell])
+
+  const getMarkKey = (date: string, branch: BranchName, column: ScheduleColumn, time: string) =>
+    `${date}_${branch}_${column}_${time}`
+
+  const saveColorMarks = (nextMarks: CellColorMark[]) => {
+    setColorMarks(nextMarks)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(COLOR_MARKS_STORAGE_KEY, JSON.stringify(nextMarks))
+    }
+  }
+
+  const getCellColorMark = (branch: BranchName, column: ScheduleColumn, time: string) =>
+    colorMarks.find((mark) => mark.id === getMarkKey(activeDateString, branch, column, time))
+
+  const handleToggleCellColor = async (
+    event: React.MouseEvent<HTMLButtonElement>,
+    branch: BranchName,
+    column: ScheduleColumn,
+    time: string,
+  ) => {
+    event.stopPropagation()
+    const existing = getCellColorMark(branch, column, time)
+
+    if (existing && (!selectedToolColor || existing.color === selectedToolColor.value)) {
+      saveColorMarks(colorMarks.filter((mark) => mark.id !== existing.id))
+      try {
+        await deleteDoc(doc(db, COLOR_MARKS_COLLECTION, existing.id))
+      } catch (error) {
+        console.error('Error eliminando marca de color en Firestore:', error)
+        window.alert('No se pudo sincronizar la eliminación en Firestore. Se conservará en caché local.')
+      }
+      return
+    }
+
+    if (!selectedToolColor) {
+      window.alert('Selecciona un color en la barra flotante para activar la celda.')
+      return
+    }
+    const trimmed = toolNote.trim() || selectedToolColor.label
+
+    const mark: CellColorMark = {
+      id: getMarkKey(activeDateString, branch, column, time),
+      date: activeDateString,
+      branch,
+      column,
+      time,
+      color: selectedToolColor.value,
+      colorLabel: selectedToolColor.label,
+      note: trimmed,
+      createdBy: auth.currentUser?.email ?? 'desconocido',
+      createdAt: new Date().toISOString(),
+    }
+
+    const withoutCurrent = colorMarks.filter((item) => item.id !== mark.id)
+    saveColorMarks([...withoutCurrent, mark])
+    try {
+      await setDoc(doc(db, COLOR_MARKS_COLLECTION, mark.id), mark)
+    } catch (error) {
+      console.error('Error guardando marca de color en Firestore:', error)
+      window.alert('No se pudo sincronizar la marca en Firestore. Quedó guardada en caché local.')
+    }
+  }
+
+  const dayColorNotes = colorMarks
+    .filter((mark) => mark.date === activeDateString)
+    .filter((mark) => (branchView === 'Ambas' ? true : mark.branch === branchView))
+    .sort((a, b) => a.time.localeCompare(b.time))
+
+  const dayColorNotesSummary = dayColorNotes.reduce<
+    Array<{ key: string; color: string; text: string; cells: number }>
+  >((acc, item) => {
+    const key = `${item.branch}-${item.color}-${item.note}`
+    const found = acc.find((entry) => entry.key === key)
+    if (found) {
+      found.cells += 1
+      return acc
+    }
+    acc.push({
+      key,
+      color: item.color,
+      text: `${formatBranchLabel(item.branch)} · ${item.note}`,
+      cells: 1,
+    })
+    return acc
+  }, [])
+
+  const occupiedTimes = timeLabels.filter((time) =>
+    appointments.some(
+      (appointment) =>
+        visibleBranches.includes((appointment.branch ?? 'Alamos') as BranchName) &&
+        appointment.date === activeDateString &&
+        getSlotTimes(appointment.time, durationToMinutes(appointment.duration)).includes(time),
+    ),
+  )
+
+  const scrollToOccupied = (direction: 'up' | 'down') => {
+    if (occupiedTimes.length === 0) {
+      window.alert('No hay pacientes en la agenda de este día.')
+      return
+    }
+
+    const threshold = 170
+    let candidate: string | undefined
+
+    if (direction === 'down') {
+      candidate = occupiedTimes.find((time) => {
+        const row = rowRefs.current[time]
+        if (!row) return false
+        return row.getBoundingClientRect().top > threshold
+      })
+      candidate = candidate ?? occupiedTimes[occupiedTimes.length - 1]
+    } else {
+      candidate = [...occupiedTimes]
+        .reverse()
+        .find((time) => {
+          const row = rowRefs.current[time]
+          if (!row) return false
+          return row.getBoundingClientRect().top < threshold
+        })
+      candidate = candidate ?? occupiedTimes[0]
+    }
+
+    const target = rowRefs.current[candidate]
+    target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+
+  const scrollToLateHour = () => {
+    const atNineteen = rowRefs.current['19:00']
+    if (atNineteen) {
+      atNineteen.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    const lastLabel = timeLabels[timeLabels.length - 1]
+    const lastRow = rowRefs.current[lastLabel]
+    if (lastRow) {
+      lastRow.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' })
+  }
+
+  const renderBranchSchedule = (branch: BranchName, registerRows: boolean) => {
     const branchColumns = BRANCH_COLUMNS[branch]
     const columnHasAppointments = getColumnHasAppointments(branch, branchColumns)
 
@@ -576,10 +870,22 @@ export default function AgendaScreen() {
           </ScheduleRowHeader>
 
           {timeLabels.map((time, rowIndex) => (
-            <ScheduleRow key={`${branch}-${time}`} $columnsCount={branchColumns.length} $compact={branchView === 'Ambas'}>
+            <ScheduleRow
+              key={`${branch}-${time}`}
+              $columnsCount={branchColumns.length}
+              $compact={branchView === 'Ambas'}
+              ref={
+                registerRows
+                  ? (row) => {
+                      rowRefs.current[time] = row
+                    }
+                  : undefined
+              }
+            >
               <TimeCell>{time}</TimeCell>
               {branchColumns.map((column) => {
                 const appointment = getAppointmentCoveringSlot(branch, column, time)
+                const colorMark = getCellColorMark(branch, column, time)
                 const isStartSlot = appointment?.time === time
                 const appointmentSlots = appointment
                   ? getSlotTimes(appointment.time, durationToMinutes(appointment.duration))
@@ -597,19 +903,27 @@ export default function AgendaScreen() {
                 return (
                   <ScheduleCell
                     key={`${branch}-${column}-${time}`}
-                    type="button"
+                    role="button"
+                    tabIndex={0}
                     $hasAppointment={Boolean(appointment)}
                     $isBlocked={Boolean(appointment) && !isStartSlot}
                     $isNew={isNew}
                     $continuesBelow={continuesBelow}
                     $isLunch={isLunch}
                     $isAfterHours={isAfterHours}
+                    $markColor={colorMark?.color}
                     aria-label={
                       appointment
                         ? `Editar cita ${formatBranchLabel(branch)} ${column} ${time}`
                         : `Agregar cita ${formatBranchLabel(branch)} ${column} ${time}`
                     }
                     onClick={() => handleCellClick(branch, column, time)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        handleCellClick(branch, column, time)
+                      }
+                    }}
                   >
                     {appointment ? (
                       isStartSlot ? (
@@ -634,6 +948,21 @@ export default function AgendaScreen() {
                     ) : (
                       <CellTooltip className="cell-tooltip">+</CellTooltip>
                     )}
+                    <CellColorToggle
+                      type="button"
+                      onClick={(event) => handleToggleCellColor(event, branch, column, time)}
+                      disabled={!selectedToolColor}
+                      $checked={Boolean(colorMark)}
+                      title={
+                        selectedToolColor
+                          ? colorMark
+                            ? 'Quitar color de celda'
+                            : `Aplicar ${selectedToolColor.label}`
+                          : 'Selecciona un color primero para activar'
+                      }
+                    >
+                      {colorMark ? '✓' : ''}
+                    </CellColorToggle>
                     <HoverLabel>{appointment ? 'Editar' : 'Agregar'}</HoverLabel>
                   </ScheduleCell>
                 )
@@ -693,6 +1022,7 @@ export default function AgendaScreen() {
             <AgendaTitle>Agenda</AgendaTitle>
             <AgendaSubTitle>
               Sucursal {branchViewLabel} • {currentWeekday}, {currentMonth} {currentDay}
+              • Usuario: {currentUserLabel}
               <CurrentTimeBadge>{currentHourLabel}</CurrentTimeBadge>
             </AgendaSubTitle>
             {branchView === 'Ambas' && (
@@ -754,13 +1084,81 @@ export default function AgendaScreen() {
                 Día siguiente →
               </DateButton>
             </DateNavigation>
+            <ColorNotesPanel>
+              <ColorNotesTitle>Notas del día</ColorNotesTitle>
+              {dayColorNotes.length === 0 ? (
+                <ColorNotesEmpty>No hay celdas coloreadas para este día.</ColorNotesEmpty>
+              ) : (
+                <ColorNotesList>
+                  {dayColorNotesSummary.map((note) => (
+                    <ColorNoteItem key={note.key}>
+                      <ColorDot style={{ background: note.color }} />
+                      <ColorNoteText>
+                        {note.text} · {note.cells} celda{note.cells > 1 ? 's' : ''}
+                      </ColorNoteText>
+                    </ColorNoteItem>
+                  ))}
+                </ColorNotesList>
+              )}
+            </ColorNotesPanel>
           </ActionGroup>
         </AgendaActions>
       </AgendaHeader>
 
       <BranchAgendaStack $compareMode={branchView === 'Ambas'}>
-        {visibleBranches.map((branch) => renderBranchSchedule(branch))}
+        {visibleBranches.map((branch, index) => renderBranchSchedule(branch, index === 0))}
       </BranchAgendaStack>
+
+      <FloatingTools ref={floatingToolsRef}>
+        <ToolbarRow>
+          <PaletteToggle
+            type="button"
+            onClick={() => setIsColorPaletteOpen((value) => !value)}
+            title="Seleccionar color"
+            $open={isColorPaletteOpen}
+          >
+            {selectedToolColor && <SelectedColorDot style={{ background: selectedToolColor.value }} />}
+          </PaletteToggle>
+          <ScrollButtons>
+            <FloatingScrollButton type="button" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} title="Ir al inicio">
+              ⇈
+            </FloatingScrollButton>
+            <FloatingScrollButton type="button" onClick={() => scrollToOccupied('up')} title="Paciente arriba">
+              ↑
+            </FloatingScrollButton>
+            <FloatingScrollButton type="button" onClick={() => scrollToOccupied('down')} title="Paciente abajo">
+              ↓
+            </FloatingScrollButton>
+            <FloatingScrollButton type="button" onClick={scrollToLateHour} title="Ir a 19:00 o al final">
+              ⇊
+            </FloatingScrollButton>
+          </ScrollButtons>
+        </ToolbarRow>
+        {isColorPaletteOpen && (
+          <CompactPanel>
+            <ColorPalette>
+              {TOOL_COLORS.map((toolColor) => (
+                <ColorChip
+                  key={toolColor.value}
+                  type="button"
+                  $active={selectedToolColor?.value === toolColor.value}
+                  style={{ background: toolColor.value }}
+                  title={toolColor.label}
+                  onClick={() => {
+                    setSelectedToolColor(toolColor)
+                    setIsColorPaletteOpen(false)
+                  }}
+                />
+              ))}
+            </ColorPalette>
+            <ToolNoteInput
+              value={toolNote}
+              onChange={(event) => setToolNote(event.target.value)}
+              placeholder="Nota"
+            />
+          </CompactPanel>
+        )}
+      </FloatingTools>
 
       
       {selectedCell && (
@@ -772,14 +1170,16 @@ export default function AgendaScreen() {
                 ×
               </CloseButton>
             </ModalHeader>
-            <AppointmentForm
-              technique={selectedCell.technique}
-              time={selectedCell.time}
-              initialData={selectedCell.appointment}
-              onSave={handleSaveAppointment}
-              onCancel={handleCancel}
-              onDelete={selectedCell.appointment ? handleDeleteAppointment : undefined}
-            />
+            <ModalBody>
+              <AppointmentForm
+                technique={selectedCell.technique}
+                time={selectedCell.time}
+                initialData={selectedCell.appointment}
+                onSave={handleSaveAppointment}
+                onCancel={handleCancel}
+                onDelete={selectedCell.appointment ? handleDeleteAppointment : undefined}
+              />
+            </ModalBody>
           </ModalContent>
         </ModalOverlay>
       )}
@@ -1192,14 +1592,17 @@ const CellTooltip = styled.span`
   }
 `
 
-const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boolean; $isNew?: boolean; $continuesBelow?: boolean; $isLunch?: boolean; $isAfterHours?: boolean }>`
+const ScheduleCell = styled.div<{ $hasAppointment: boolean; $isBlocked: boolean; $isNew?: boolean; $continuesBelow?: boolean; $isLunch?: boolean; $isAfterHours?: boolean; $markColor?: string }>`
   min-height: 92px;
   padding: 12px;
   border-left: 1px solid #000;
   border-right: 1px solid #000;
   border-top: ${({ $isBlocked }) => ($isBlocked ? 'none' : '1px solid #000')};
   border-bottom: ${({ $continuesBelow }) => ($continuesBelow ? 'none' : '1px solid #000')};
-  background: ${({ $hasAppointment, $isNew, $isBlocked, $isLunch, $isAfterHours }) =>
+  background: ${({ $markColor, $hasAppointment, $isNew, $isBlocked, $isLunch, $isAfterHours }) =>
+    $markColor
+      ? $markColor
+      :
     $hasAppointment
       ? $isNew
         ? '#bbf7d0'
@@ -1227,7 +1630,10 @@ const ScheduleCell = styled.button<{ $hasAppointment: boolean; $isBlocked: boole
   padding: ${({ $hasAppointment }) => ($hasAppointment ? '18px 12px' : '12px')};
 
   &:hover {
-    background: ${({ $hasAppointment, $isNew }) =>
+    background: ${({ $markColor, $hasAppointment, $isNew }) =>
+      $markColor
+        ? $markColor
+        :
       $hasAppointment
         ? $isNew
           ? '#9df5b8'
@@ -1361,24 +1767,203 @@ const HoverLabel = styled.span`
   }
 `
 
+const CellColorToggle = styled.button<{ $checked: boolean }>`
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #0f172a;
+  border-radius: 6px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 800;
+  background: ${({ $checked }) => ($checked ? '#0f172a' : '#ffffff')};
+  color: ${({ $checked }) => ($checked ? '#f8fafc' : 'transparent')};
+  opacity: 0;
+  line-height: 1;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  transform: translateY(2px);
+  pointer-events: none;
+
+  ${ScheduleCell}:hover &,
+  ${ScheduleCell}:focus-within & {
+    opacity: 0.88;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  &:disabled {
+    opacity: 0;
+    cursor: default;
+  }
+`
+
+const ColorNotesPanel = styled.div`
+  margin-top: 2px;
+  padding: 12px;
+  border-radius: 14px;
+  background: #e2e8f0;
+  border: 1px solid #cbd5e1;
+  display: grid;
+  gap: 8px;
+`
+
+const ColorNotesTitle = styled.p`
+  margin: 0;
+  font-size: 13px;
+  font-weight: 800;
+  color: #0f172a;
+`
+
+const ColorNotesEmpty = styled.p`
+  margin: 0;
+  font-size: 12px;
+  color: #475569;
+`
+
+const ColorNotesList = styled.div`
+  display: grid;
+  gap: 6px;
+`
+
+const ColorNoteItem = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+`
+
+const ColorDot = styled.span`
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.28);
+`
+
+const ColorNoteText = styled.span`
+  font-size: 12px;
+  color: #1f2937;
+  font-weight: 600;
+`
+
+const FloatingTools = styled.aside`
+  position: fixed;
+  right: 22px;
+  bottom: 18px;
+  z-index: 45;
+  width: fit-content;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 10px 22px rgba(2, 6, 23, 0.34);
+  padding: 6px;
+  display: grid;
+  gap: 6px;
+`
+
+const ToolbarRow = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 6px;
+`
+
+const PaletteToggle = styled.button<{ $open: boolean }>`
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid ${({ $open }) => ($open ? '#e2e8f0' : 'rgba(148, 163, 184, 0.55)')};
+  background: transparent;
+  display: grid;
+  place-items: center;
+  padding: 0;
+`
+
+const SelectedColorDot = styled.span`
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(15, 23, 42, 0.38);
+`
+
+const CompactPanel = styled.div`
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  background: rgba(30, 41, 59, 0.58);
+`
+
+const ColorPalette = styled.div`
+  display: flex;
+  gap: 6px;
+`
+
+const ColorChip = styled.button<{ $active: boolean }>`
+  width: 18px;
+  height: 18px;
+  border-radius: 6px;
+  border: ${({ $active }) => ($active ? '2px solid #f8fafc' : '1px solid rgba(15, 23, 42, 0.4)')};
+  box-shadow: ${({ $active }) => ($active ? '0 0 0 2px rgba(148, 163, 184, 0.55)' : 'none')};
+`
+
+const ToolNoteInput = styled.input`
+  min-height: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.9);
+  color: #e2e8f0;
+  padding: 0 6px;
+  font-size: 11px;
+  width: 120px;
+
+  &::placeholder {
+    color: #94a3b8;
+  }
+`
+
+const ScrollButtons = styled.div`
+  display: flex;
+  gap: 6px;
+`
+
+const FloatingScrollButton = styled.button`
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  background: #dbeafe;
+  color: #1e3a8a;
+  font-size: 16px;
+  font-weight: 800;
+`
+
 const ModalOverlay = styled.div`
   position: fixed;
   inset: 0;
   background: rgba(15, 23, 42, 0.48);
   display: grid;
-  align-items: start;
+  align-items: center;
   justify-items: center;
-  padding: 24px;
-  overflow-y: auto;
+  padding: 16px;
+  overflow: hidden;
   z-index: 50;
 `
 
 const ModalContent = styled.div`
-  width: min(760px, 100%);
+  width: min(720px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: hidden;
   background: #b0c6dd;
-  border-radius: 28px;
+  border-radius: 22px;
   box-shadow: 0 32px 72px rgba(15, 23, 42, 0.28);
-  padding: 28px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
 `
 
 
@@ -1388,7 +1973,16 @@ const ModalHeader = styled.div`
   align-items: center;
   justify-content: space-between;
   gap: 18px;
-  margin-bottom: 18px;
+  padding: 14px 18px 12px;
+  background: #b0c6dd;
+  border-radius: 22px 22px 0 0;
+`
+
+const ModalBody = styled.div`
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 18px 18px;
 `
 
 const ModalTitle = styled.h2`
