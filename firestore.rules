@@ -23,30 +23,13 @@ service cloud.firestore {
       return request.auth.token.email.lower();
     }
 
-    function isCrossBranchAdmin() {
+    function canEditAgendaColorMarks() {
       return userEmail() in [
-        'alamosxxi@gmail.com',
-        'sanfexxi@gmail.com'
+        'alamos01m@gmail.com',
+        'alamos02m@gmail.com',
+        'alamos03t@gmail.com',
+        'alamos04u@gmail.com'
       ];
-    }
-
-    function canAccessBranch(branch) {
-      return isCrossBranchAdmin()
-        || (
-          branch == 'Alamos'
-          && userEmail() in [
-            'alamos04u@gmail.com',
-            'alamos01m@gmail.com',
-            'alamos02m@gmail.com',
-            'alamos03t@gmail.com'
-          ]
-        )
-        || (
-          branch == 'San Felipe'
-          && userEmail() in [
-            'sanfe01f@gmail.com'
-          ]
-        );
     }
 
     function isNonEmptyString(value) {
@@ -83,10 +66,10 @@ service cloud.firestore {
     }
 
     match /agenda_color_marks/{markId} {
-      allow read: if isSignedIn() && canAccessBranch(resource.data.branch);
+      allow read: if isSignedIn();
       allow create, update: if isSignedIn()
+        && canEditAgendaColorMarks()
         && validateColorMark(request.resource.data)
-        && canAccessBranch(request.resource.data.branch)
         && request.resource.data.createdBy == request.auth.token.email
         && request.resource.id == buildColorMarkId(
           request.resource.data.date,
@@ -94,7 +77,7 @@ service cloud.firestore {
           request.resource.data.column,
           request.resource.data.time
         );
-      allow delete: if isSignedIn() && canAccessBranch(resource.data.branch);
+      allow delete: if isSignedIn() && canEditAgendaColorMarks();
     }
 
     function validateAppointment(data) {

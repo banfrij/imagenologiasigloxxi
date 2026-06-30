@@ -135,6 +135,13 @@ const TOOL_COLORS: ToolColor[] = [
   { value: '#3b82f6', label: 'Mantenimiento' },
 ]
 
+const COLOR_MARK_EDITORS = [
+  'alamos01m@gmail.com',
+  'alamos02m@gmail.com',
+  'alamos03t@gmail.com',
+  'alamos04u@gmail.com',
+]
+
 export default function AgendaScreen() {
   const [activeDate, setActiveDate] = useState(() => clampToAgendaYear(toDateOnly(new Date())))
   const [calendarMonth, setCalendarMonth] = useState(() => {
@@ -150,7 +157,7 @@ export default function AgendaScreen() {
 
   const [newlyCreatedAppointmentId, setNewlyCreatedAppointmentId] = useState<number | null>(null)
   const [calendarCollapsed, setCalendarCollapsed] = useState(false)
-  const [branchView, setBranchView] = useState<BranchView>('Alamos')
+  const [branchView, setBranchView] = useState<BranchView>('Ambas')
   const [currentTime, setCurrentTime] = useState(() => new Date())
   const [selectedToolColor, setSelectedToolColor] = useState<ToolColor | null>(null)
   const [isColorPaletteOpen, setIsColorPaletteOpen] = useState(false)
@@ -301,6 +308,7 @@ export default function AgendaScreen() {
   const visibleBranches: BranchName[] = branchView === 'Ambas' ? [...BRANCHES] : [branchView]
   const branchViewLabel = branchView === 'Ambas' ? 'Álamos y San Felipe' : formatBranchLabel(branchView)
   const primaryBranch = branchView === 'Ambas' ? 'Alamos' : branchView
+  const canEditColorMarks = COLOR_MARK_EDITORS.includes((auth.currentUser?.email ?? '').toLowerCase())
 
   useEffect(() => {
     const marksQuery = query(
@@ -724,6 +732,12 @@ export default function AgendaScreen() {
     time: string,
   ) => {
     event.stopPropagation()
+
+    if (!canEditColorMarks) {
+      window.alert('Tu usuario solo tiene permiso de lectura para los colores de agenda.')
+      return
+    }
+
     const existing = getCellColorMark(branch, column, time)
 
     if (existing && (!selectedToolColor || existing.color === selectedToolColor.value)) {
@@ -951,10 +965,12 @@ export default function AgendaScreen() {
                     <CellColorToggle
                       type="button"
                       onClick={(event) => handleToggleCellColor(event, branch, column, time)}
-                      disabled={!selectedToolColor}
+                      disabled={!selectedToolColor || !canEditColorMarks}
                       $checked={Boolean(colorMark)}
                       title={
-                        selectedToolColor
+                        !canEditColorMarks
+                          ? 'Solo lectura'
+                          : selectedToolColor
                           ? colorMark
                             ? 'Quitar color de celda'
                             : `Aplicar ${selectedToolColor.label}`
